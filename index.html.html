@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>スライドパズル</title>
+
+  <!-- ============================================================
+    Google AdSense
+    ① https://adsense.google.com でアカウント取得・審査通過後、
+      下記 ca-pub-XXXXXXXXXXXXXXXX をご自分の Publisher ID に変更してください。
+  ============================================================ -->
+  <!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXX" crossorigin="anonymous"></script> -->
+
+  <!-- Firebase SDK (compat v9) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f4f0;
+      --surface: #fff;
+      --border: #e0deda;
+      --text: #1a1a1a;
+      --muted: #aaa;
+      --accent: #1a1a1a;
+      --highlight: #e8f0fe;
+    }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── Ad zones ── */
+    .ad-top {
+      width: 100%;
+      max-width: 728px;
+      min-height: 90px;
+      background: #f0ede8;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+    }
+
+    .main-wrap {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+      padding: 32px 16px;
+      width: 100%;
+      max-width: 900px;
+      justify-content: center;
+    }
+
+    .ad-side {
+      width: 160px;
+      min-height: 600px;
+      background: #f0ede8;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      flex-shrink: 0;
+    }
+
+    /* hide side ad on narrow screens */
+    @media (max-width: 700px) { .ad-side { display: none; } }
+
+    .game-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+    }
+
+    h1 {
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 24px;
+    }
+
+    .stats {
+      display: flex;
+      gap: 36px;
+      margin-bottom: 20px;
+    }
+
+    .stat { text-align: center; }
+    .stat-label { font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .stat-value { font-size: 1.4rem; font-weight: 300; font-variant-numeric: tabular-nums; }
+
+    .size-switcher { display: flex; gap: 8px; margin-bottom: 18px; }
+
+    .size-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .size-btn:hover { border-color: #999; color: #444; }
+    .size-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .board {
+      display: grid;
+      gap: 4px;
+      padding: 4px;
+      background: var(--border);
+      border-radius: 10px;
+    }
+
+    .tile {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border-radius: 6px;
+      font-weight: 300;
+      cursor: pointer;
+      user-select: none;
+      transition: transform 0.12s ease, background 0.12s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    }
+    .tile:hover:not(.empty) { background: #f0efeb; }
+    .tile:active:not(.empty) { transform: scale(0.95); }
+    .tile.empty { background: transparent; box-shadow: none; cursor: default; }
+    .tile.movable { background: var(--highlight); }
+
+    .controls { display: flex; gap: 10px; margin-top: 20px; }
+
+    .btn {
+      border: none;
+      border-radius: 6px;
+      padding: 9px 20px;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #333; }
+    .btn-secondary { background: none; color: #888; border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: #999; color: #444; }
+    .btn-rank { background: none; color: #888; border: 1px solid var(--border); }
+    .btn-rank:hover { border-color: #999; color: #444; }
+
+    /* ── Modal base ── */
+    .modal-bg {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.35);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.25s;
+      z-index: 100;
+    }
+    .modal-bg.show { opacity: 1; pointer-events: all; }
+
+    .modal {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 32px 28px;
+      width: 90%;
+      max-width: 400px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      transform: translateY(12px);
+      transition: transform 0.25s;
+    }
+    .modal-bg.show .modal { transform: translateY(0); }
+
+    .modal h2 { font-size: 1.2rem; font-weight: 400; margin-bottom: 6px; }
+    .modal .sub { font-size: 0.8rem; color: var(--muted); margin-bottom: 20px; }
+
+    .win-stats { display: flex; gap: 28px; margin-bottom: 20px; }
+
+    .name-input-wrap { margin-bottom: 16px; }
+    .name-input-wrap label { display: block; font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+    .name-input-wrap input {
+      width: 100%; border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 12px;
+      font-size: 0.9rem; outline: none;
+      transition: border 0.15s;
+    }
+    .name-input-wrap input:focus { border-color: #999; }
+
+    /* ── Ranking modal ── */
+    .rank-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+    .rank-tab {
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; padding: 4px 12px;
+      font-size: 0.72rem; letter-spacing: 0.08em;
+      color: var(--muted); cursor: pointer; transition: all 0.15s;
+    }
+    .rank-tab:hover { border-color: #999; color: #444; }
+    .rank-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .rank-list { list-style: none; max-height: 300px; overflow-y: auto; }
+    .rank-list li {
+      display: flex; align-items: center;
+      padding: 9px 0;
+      border-bottom: 1px solid #f0efeb;
+      font-size: 0.85rem;
+      gap: 12px;
+    }
+    .rank-list li:last-child { border-bottom: none; }
+    .rank-num { width: 24px; text-align: right; color: var(--muted); font-size: 0.75rem; flex-shrink: 0; }
+    .rank-name { flex: 1; font-weight: 400; }
+    .rank-moves { color: var(--muted); font-size: 0.78rem; }
+    .rank-time { color: var(--muted); font-size: 0.78rem; width: 44px; text-align: right; flex-shrink: 0; }
+    .rank-medal { font-size: 1rem; flex-shrink: 0; width: 20px; }
+
+    .rank-loading { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 24px; }
+    .rank-error { text-align: center; color: #e57373; font-size: 0.8rem; padding: 16px; }
+    .rank-empty { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 16px; }
+
+    .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+<!-- Top Banner Ad -->
+<div class="ad-top">
+  <!-- AdSense 審査通過後にここを差し替えてください -->
+  <!-- <ins class="adsbygoogle"
+    style="display:inline-block;width:728px;height:90px"
+    data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+    data-ad-slot="XXXXXXXXXX"></ins>
+  <script>(adsbygoogle = window.adsbygoogle || []).push({});</script> -->
+  広告スペース (728×90)
+</div>
+
+<div class="main-wrap">
+
+  <!-- Side Ad -->
+  <div class="ad-side">
+    <!-- <ins class="adsbygoogle"
+      style="display:inline-block;width:160px;height:600px"
+      data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+      data-ad-slot="XXXXXXXXXX"></ins>
+    <script>(adsbygoogle = window.adsbygoogle || []).push({});</script> -->
+    広告<br>(160×600)
+  </div>
+
+  <!-- Game -->
+  <div class="game-col">
+    <h1>Slide Puzzle</h1>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">手数</div>
+        <div class="stat-value" id="moves">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">時間</div>
+        <div class="stat-value" id="timer">0:00</div>
+      </div>
+    </div>
+
+    <div class="size-switcher">
+      <button class="size-btn" data-size="3">3×3</button>
+      <button class="size-btn active" data-size="4">4×4</button>
+      <button class="size-btn" data-size="5">5×5</button>
+    </div>
+
+    <div class="board" id="board"></div>
+
+    <div class="controls">
+      <button class="btn btn-primary" id="shuffleBtn">シャッフル</button>
+      <button class="btn btn-secondary" id="resetBtn">リセット</button>
+      <button class="btn btn-rank" id="rankBtn">🏆 ランキング</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Win Modal ── -->
+<div class="modal-bg" id="winModal">
+  <div class="modal">
+    <h2>🎉 クリア！</h2>
+    <p class="sub">おめでとうございます！</p>
+    <div class="win-stats">
+      <div class="stat">
+        <div class="stat-label">手数</div>
+        <div class="stat-value" id="winMoves">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">時間</div>
+        <div class="stat-value" id="winTime">0:00</div>
+      </div>
+    </div>
+    <div class="name-input-wrap">
+      <label>ニックネームを入力してランキングに登録</label>
+      <input type="text" id="nameInput" placeholder="あなたの名前" maxlength="16">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="skipRankBtn">スキップ</button>
+      <button class="btn btn-primary" id="submitRankBtn">登録する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Ranking Modal ── -->
+<div class="modal-bg" id="rankModal">
+  <div class="modal">
+    <h2>🏆 ランキング</h2>
+    <div class="rank-tabs">
+      <button class="rank-tab active" data-size="3">3×3</button>
+      <button class="rank-tab" data-size="4">4×4</button>
+      <button class="rank-tab" data-size="5">5×5</button>
+    </div>
+    <ul class="rank-list" id="rankList">
+      <li class="rank-loading">読み込み中...</li>
+    </ul>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="closeRankBtn">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ================================================================
+//  Firebase 設定
+//  Firebase Console (https://console.firebase.google.com) で
+//  プロジェクトを作成し、Firestore を有効にした後、
+//  下記の値をご自分のプロジェクトの設定値に差し替えてください。
+// ================================================================
+const firebaseConfig = {
+  apiKey:            "YOUR_API_KEY",
+  authDomain:        "YOUR_PROJECT.firebaseapp.com",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId:             "YOUR_APP_ID"
+};
+
+let db = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+} catch(e) {
+  console.warn("Firebase 未設定:", e.message);
+}
+
+// ================================================================
+//  ゲーム本体
+// ================================================================
+let size = 4;
+let tiles = [];
+let emptyIdx = 0;
+let moves = 0;
+let seconds = 0;
+let timerInterval = null;
+let started = false;
+let pendingScore = null; // クリア後にランキング登録待ちのスコア
+
+const boardEl    = document.getElementById('board');
+const movesEl    = document.getElementById('moves');
+const timerEl    = document.getElementById('timer');
+const winModal   = document.getElementById('winModal');
+const rankModal  = document.getElementById('rankModal');
+
+function tileSize() {
+  return size === 3 ? 96 : size === 4 ? 80 : 62;
+}
+
+function initBoard(shuffle = true) {
+  clearInterval(timerInterval);
+  seconds = 0; moves = 0; started = false;
+  movesEl.textContent = '0';
+  timerEl.textContent = '0:00';
+  winModal.classList.remove('show');
+  tiles = Array.from({ length: size * size }, (_, i) => i);
+  if (shuffle) shuffleTiles();
+  emptyIdx = tiles.indexOf(0);
+  render();
+}
+
+function shuffleTiles() {
+  let ei = tiles.indexOf(0);
+  for (let i = 0; i < 600; i++) {
+    const n = getNeighbors(ei);
+    const ni = n[Math.floor(Math.random() * n.length)];
+    [tiles[ei], tiles[ni]] = [tiles[ni], tiles[ei]];
+    ei = ni;
+  }
+}
+
+function getNeighbors(idx) {
+  const r = Math.floor(idx / size), c = idx % size, n = [];
+  if (r > 0) n.push(idx - size);
+  if (r < size - 1) n.push(idx + size);
+  if (c > 0) n.push(idx - 1);
+  if (c < size - 1) n.push(idx + 1);
+  return n;
+}
+
+function canMove(idx) { return getNeighbors(emptyIdx).includes(idx); }
+
+function moveTile(idx) {
+  if (!canMove(idx)) return;
+  if (!started) {
+    started = true;
+    timerInterval = setInterval(() => { seconds++; timerEl.textContent = fmt(seconds); }, 1000);
+  }
+  [tiles[emptyIdx], tiles[idx]] = [tiles[idx], tiles[emptyIdx]];
+  emptyIdx = idx;
+  moves++;
+  movesEl.textContent = moves;
+  render();
+  if (checkWin()) setTimeout(showWin, 280);
+}
+
+function checkWin() {
+  for (let i = 0; i < tiles.length - 1; i++) if (tiles[i] !== i + 1) return false;
+  return tiles[tiles.length - 1] === 0;
+}
+
+function showWin() {
+  clearInterval(timerInterval);
+  document.getElementById('winMoves').textContent = moves;
+  document.getElementById('winTime').textContent = fmt(seconds);
+  document.getElementById('nameInput').value = localStorage.getItem('puzzle_name') || '';
+  pendingScore = { moves, seconds, size };
+  winModal.classList.add('show');
+}
+
+function fmt(s) {
+  return `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+}
+
+function render() {
+  const ts = tileSize();
+  boardEl.style.gridTemplateColumns = `repeat(${size},${ts}px)`;
+  boardEl.style.gridTemplateRows    = `repeat(${size},${ts}px)`;
+  boardEl.innerHTML = '';
+  const fs = size === 3 ? '1.8rem' : size === 4 ? '1.35rem' : '1rem';
+  tiles.forEach((val, idx) => {
+    const el = document.createElement('div');
+    el.className = 'tile' + (val === 0 ? ' empty' : canMove(idx) ? ' movable' : '');
+    el.style.cssText = `width:${ts}px;height:${ts}px;font-size:${fs}`;
+    if (val !== 0) {
+      el.textContent = val;
+      el.addEventListener('click', () => moveTile(idx));
+    }
+    boardEl.appendChild(el);
+  });
+}
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  const r = Math.floor(emptyIdx / size), c = emptyIdx % size;
+  let t = -1;
+  if (e.key==='ArrowUp'    && r < size-1) t = emptyIdx + size;
+  if (e.key==='ArrowDown'  && r > 0)      t = emptyIdx - size;
+  if (e.key==='ArrowLeft'  && c < size-1) t = emptyIdx + 1;
+  if (e.key==='ArrowRight' && c > 0)      t = emptyIdx - 1;
+  if (t >= 0) { e.preventDefault(); moveTile(t); }
+});
+
+// Controls
+document.getElementById('shuffleBtn').addEventListener('click', () => initBoard(true));
+document.getElementById('resetBtn').addEventListener('click', () => initBoard(false));
+document.querySelectorAll('.size-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    size = +btn.dataset.size;
+    initBoard(true);
+  });
+});
+
+// ================================================================
+//  Ranking
+// ================================================================
+async function submitScore(name, score) {
+  if (!db) { alert('Firebase が設定されていません。'); return; }
+  if (!name.trim()) { alert('ニックネームを入力してください。'); return; }
+  localStorage.setItem('puzzle_name', name.trim());
+  try {
+    await db.collection('rankings').add({
+      name: name.trim().slice(0, 16),
+      moves: score.moves,
+      seconds: score.seconds,
+      size: score.size,
+      ts: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    winModal.classList.remove('show');
+    pendingScore = null;
+    openRankModal(score.size);
+  } catch(e) {
+    alert('登録に失敗しました: ' + e.message);
+  }
+}
+
+async function loadRanking(sz) {
+  const listEl = document.getElementById('rankList');
+  listEl.innerHTML = '<li class="rank-loading">読み込み中...</li>';
+  if (!db) {
+    listEl.innerHTML = '<li class="rank-error">Firebase 未設定 — firebaseConfig を設定してください</li>';
+    return;
+  }
+  try {
+    const snap = await db.collection('rankings')
+      .where('size', '==', sz)
+      .orderBy('moves', 'asc')
+      .orderBy('seconds', 'asc')
+      .limit(20)
+      .get();
+
+    if (snap.empty) {
+      listEl.innerHTML = '<li class="rank-empty">まだ記録がありません</li>';
+      return;
+    }
+
+    const medals = ['🥇','🥈','🥉'];
+    listEl.innerHTML = '';
+    snap.docs.forEach((doc, i) => {
+      const d = doc.data();
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="rank-medal">${medals[i] || ''}</span>
+        <span class="rank-num">${i+1}</span>
+        <span class="rank-name">${escHtml(d.name)}</span>
+        <span class="rank-moves">${d.moves}手</span>
+        <span class="rank-time">${fmt(d.seconds)}</span>
+      `;
+      listEl.appendChild(li);
+    });
+  } catch(e) {
+    listEl.innerHTML = `<li class="rank-error">読み込み失敗: ${e.message}</li>`;
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+let rankDisplaySize = 4;
+
+function openRankModal(sz) {
+  sz = sz || size;
+  rankDisplaySize = sz;
+  document.querySelectorAll('.rank-tab').forEach(t => {
+    t.classList.toggle('active', +t.dataset.size === sz);
+  });
+  rankModal.classList.add('show');
+  loadRanking(sz);
+}
+
+document.getElementById('rankBtn').addEventListener('click', () => openRankModal(size));
+document.getElementById('closeRankBtn').addEventListener('click', () => rankModal.classList.remove('show'));
+rankModal.addEventListener('click', e => { if (e.target === rankModal) rankModal.classList.remove('show'); });
+
+document.querySelectorAll('.rank-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    rankDisplaySize = +tab.dataset.size;
+    document.querySelectorAll('.rank-tab').forEach(t => t.classList.toggle('active', +t.dataset.size === rankDisplaySize));
+    loadRanking(rankDisplaySize);
+  });
+});
+
+document.getElementById('submitRankBtn').addEventListener('click', () => {
+  if (!pendingScore) return;
+  const name = document.getElementById('nameInput').value;
+  submitScore(name, pendingScore);
+});
+
+document.getElementById('skipRankBtn').addEventListener('click', () => {
+  winModal.classList.remove('show');
+  pendingScore = null;
+  initBoard(true);
+});
+
+winModal.addEventListener('click', e => { if (e.target === winModal) winModal.classList.remove('show'); });
+
+// Start
+initBoard(true);
+</script>
+</body>
+</html>
